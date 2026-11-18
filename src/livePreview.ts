@@ -1,6 +1,6 @@
 import { ViewPlugin, type PluginValue, type ViewUpdate, type EditorView } from '@codemirror/view';
 import { type App, editorInfoField, editorLivePreviewField } from 'obsidian';
-import { augmentGrid, revertTable, type GridCell } from './tableAugmenter';
+import { augmentGrid, revertTable, unmergeTable, type GridCell } from './tableAugmenter';
 import { getTableWidgets, type InternalTableWidget } from './tableWidgets';
 import { isSheetDisabled } from './tableModel';
 
@@ -22,9 +22,10 @@ export interface SheetsLivePreviewHost {
  * native grid alone: its internal model still has every cell, so a merged
  * (colspan/rowspan + hidden) layout desyncs from the model and breaks selection
  * and cell editing. We detect "this table is active" (focus inside it, the doc
- * selection overlaps it, or it has selected cells) and revert just that table,
- * and additionally un-merge synchronously on `pointerdown` so a click lands on the
- * real native cell rather than a merged placeholder.
+ * selection overlaps it, or it has selected cells) and drop just the merges and
+ * directive stripping for that table, keeping classes and inline styles, which do
+ * not change the cell structure. We also un-merge synchronously on `pointerdown`
+ * so a click lands on the real native cell rather than a merged placeholder.
  *
  * These widgets are private API: we read `dom.cmTile/cmView.widget.{rows,tableEl,start,end,
  * selectedCells}` and each cell's `{text, el, contentEl}`, all defensively.
@@ -61,8 +62,7 @@ function augmentEditor(view: EditorView, host: SheetsLivePreviewHost) {
 		view.state.field(editorLivePreviewField, false) !== false;
 
 	for (const widget of widgets) {
-		// Disabled, or being edited/selected → show Obsidian's plain native grid.
-		if (!enabled || isTableActive(widget, view)) {
+		if (!enabled) {
 			if (widget.tableEl) revertTable(widget.tableEl);
 			continue;
 		}
@@ -76,7 +76,8 @@ function augmentEditor(view: EditorView, host: SheetsLivePreviewHost) {
 					contentEl: cell.contentEl,
 				}))
 		);
-		if (grid.length) augmentGrid(grid);
+		// Being edited/selected → keep Obsidian's native grid, but still apply styles.
+		if (grid.length) augmentGrid(grid, {}, isTableActive(widget, view));
 	}
 }
 
@@ -111,7 +112,7 @@ export function sheetsLivePreviewExtension(host: SheetsLivePreviewHost) {
 				if (target) {
 					for (const widget of getTableWidgets(this.view.dom)) {
 						if (widget.tableEl?.contains(target)) {
-							revertTable(widget.tableEl);
+							unmergeTable(widget.tableEl);
 							break;
 						}
 					}

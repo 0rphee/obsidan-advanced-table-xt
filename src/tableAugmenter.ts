@@ -69,6 +69,23 @@ function revertCell(el: HTMLTableCellElement) {
 }
 
 /**
+ * Undo only the merge layout {@link augmentGrid} applied (hidden cells and
+ * spans), keeping classes, inline styles and stripped directives in place.
+ */
+export function unmergeTable(tableEl: HTMLTableElement): void {
+	for (const row of Array.from(tableEl.rows)) {
+		for (const cell of Array.from(row.cells)) {
+			cell.classList.remove(SHEETS_HIDDEN_CLASS);
+			if (cell.classList.contains(SHEETS_MERGED_CLASS)) {
+				cell.classList.remove(SHEETS_MERGED_CLASS);
+				cell.colSpan = 1;
+				cell.rowSpan = 1;
+			}
+		}
+	}
+}
+
+/**
  * Undo everything {@link augmentGrid} applied to a table's cells. Used when the
  * feature is switched off so an already-rendered table reverts to plain native
  * rendering, including directive text.
@@ -132,7 +149,7 @@ function stripTrailingStyleDirective(root: HTMLElement, changes: CellChanges) {
 	changes.content = { root, children, text, stripped: root.innerHTML };
 }
 
-function applyCellStyle(cell: GridCell, parsed: ParsedCell, groups: { classes: string[]; style: Properties }[], options: AugmentOptions) {
+function applyCellStyle(cell: GridCell, parsed: ParsedCell, groups: { classes: string[]; style: Properties }[], options: AugmentOptions, strip: boolean) {
 	const changes: CellChanges = { classes: [], styles: new Map() };
 	for (const group of [...groups, parsed]) {
 		const styles: Properties[] = [];
@@ -160,7 +177,7 @@ function applyCellStyle(cell: GridCell, parsed: ParsedCell, groups: { classes: s
 			}
 		}
 	}
-	if (parsed.hasStyle) stripTrailingStyleDirective(contentRoot(cell), changes);
+	if (parsed.hasStyle && strip) stripTrailingStyleDirective(contentRoot(cell), changes);
 	if (changes.classes.length || changes.styles.size || changes.content) CHANGES.set(cell.el, changes);
 }
 
@@ -172,8 +189,12 @@ function applyCellStyle(cell: GridCell, parsed: ParsedCell, groups: { classes: s
  * This is intentionally idempotent: it derives everything from the immutable
  * cell source text, so it can be re-run after Obsidian rebuilds the Live
  * Preview widget without compounding its own changes.
+ *
+ * With `stylesOnly`, merges are left out and directive text stays visible, so
+ * the grid keeps Obsidian's native layout (used while a table is being edited)
+ * and only classes and inline styles are applied.
  */
-export function augmentGrid(grid: GridCell[][], options: AugmentOptions = {}): void {
+export function augmentGrid(grid: GridCell[][], options: AugmentOptions = {}, stylesOnly = false): void {
 	if (!grid.length) return;
 
 	// Reset any previous augmentation first so a re-run (after an Obsidian
@@ -187,6 +208,9 @@ export function augmentGrid(grid: GridCell[][], options: AugmentOptions = {}): v
 
 	const parsed = grid.map(row => row.map(cell => parseCell(cell.text)));
 	const headerCol = findHeaderColumn(grid.map(row => row.map(c => c.text)));
+	const groupsFor = (r: number, c: number) =>
+		[options.tableStyle, options.rows?.[r], options.columns?.[c]]
+			.filter((group): group is { classes: string[]; style: Properties } => !!group);
 
 	// anchor[r][c] holds the visible cell that (r, c) renders into (after merges).
 	const anchor: (GridCell | null)[][] = grid.map(row => row.map(() => null));
@@ -195,6 +219,12 @@ export function augmentGrid(grid: GridCell[][], options: AugmentOptions = {}): v
 		for (let c = 0; c < grid[r].length; c++) {
 			const cell = grid[r][c];
 			const p = parsed[r][c];
+
+			if (stylesOnly) {
+				if (headerCol > 0 && c < headerCol) cell.el.classList.add(SHEETS_ROW_HEADER_CLASS);
+				applyCellStyle(cell, p, groupsFor(r, c), options, false);
+				continue;
+			}
 
 			// The all-dashes vertical-header marker column is removed entirely, but
 			// stays "transparent" to merge chaining: pointing its anchor at the cell
@@ -252,9 +282,7 @@ export function augmentGrid(grid: GridCell[][], options: AugmentOptions = {}): v
 			} else {
 				// Visible own-anchor cell: row-header styling + inline cell styling.
 				if (headerCol > 0 && c < headerCol) cell.el.classList.add(SHEETS_ROW_HEADER_CLASS);
-				const groups = [options.tableStyle, options.rows?.[r], options.columns?.[c]]
-					.filter((group): group is { classes: string[]; style: Properties } => !!group);
-				applyCellStyle(cell, p, groups, options);
+				applyCellStyle(cell, p, groupsFor(r, c), options, true);
 			}
 		}
 	}
