@@ -69,6 +69,19 @@ function revertCell(el: HTMLTableCellElement) {
 }
 
 /**
+ * Put back style properties Obsidian removed from a styled cell. Obsidian locks
+ * a cell's size when it gains or loses the cell editor, then clears the whole
+ * `style` attribute, which also drops our inline styles.
+ */
+export function restoreStyles(el: HTMLTableCellElement): void {
+	const changes = CHANGES.get(el);
+	if (!changes) return;
+	for (const [name, style] of changes.styles) {
+		if (style.applied && !el.style.getPropertyValue(name)) el.style.setProperty(name, style.applied);
+	}
+}
+
+/**
  * Undo only the merge layout {@link augmentGrid} applied (hidden cells and
  * spans), keeping classes, inline styles and stripped directives in place.
  */

@@ -1,6 +1,6 @@
 import { ViewPlugin, type PluginValue, type ViewUpdate, type EditorView } from '@codemirror/view';
 import { type App, editorInfoField, editorLivePreviewField } from 'obsidian';
-import { augmentGrid, revertTable, unmergeTable, type GridCell } from './tableAugmenter';
+import { augmentGrid, restoreStyles, revertTable, unmergeTable, type GridCell } from './tableAugmenter';
 import { getTableWidgets, type InternalTableWidget } from './tableWidgets';
 import { isSheetDisabled } from './tableModel';
 
@@ -85,8 +85,14 @@ export function sheetsLivePreviewExtension(host: SheetsLivePreviewHost) {
 	return ViewPlugin.fromClass(
 		class implements PluginValue {
 			private frame = 0;
+			private styleWatcher: MutationObserver | null = null;
 
 			constructor(private view: EditorView) {
+				const win = this.view.dom.ownerDocument.defaultView;
+				if (win) {
+					this.styleWatcher = new win.MutationObserver(this.onStyleChange);
+					this.styleWatcher.observe(this.view.dom, { subtree: true, attributes: true, attributeFilter: ['style'] });
+				}
 				this.view.dom.addEventListener('pointerdown', this.onMouseDown, true);
 				this.view.dom.addEventListener('mousedown', this.onMouseDown, true);
 				this.view.dom.addEventListener('focusin', this.onInteract);
@@ -122,6 +128,17 @@ export function sheetsLivePreviewExtension(host: SheetsLivePreviewHost) {
 
 			private onInteract = () => this.schedule();
 
+			/**
+			 * Runs as a microtask right after Obsidian clears a cell's `style`, so
+			 * our styles are back before the next paint and the column does not jump.
+			 */
+			private onStyleChange = (records: MutationRecord[]) => {
+				for (const record of records) {
+					const target = record.target as HTMLElement;
+					if (target.tagName === 'TD' || target.tagName === 'TH') restoreStyles(target as HTMLTableCellElement);
+				}
+			};
+
 			private schedule() {
 				const win = this.view.dom.ownerDocument.defaultView;
 				if (!win) return;
@@ -139,6 +156,7 @@ export function sheetsLivePreviewExtension(host: SheetsLivePreviewHost) {
 			destroy() {
 				const win = this.view.dom.ownerDocument.defaultView;
 				if (this.frame) win?.cancelAnimationFrame(this.frame);
+				this.styleWatcher?.disconnect();
 				for (const widget of getTableWidgets(this.view.dom)) {
 					if (widget.tableEl) revertTable(widget.tableEl);
 				}
